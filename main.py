@@ -8,6 +8,9 @@ from rich.tree import Tree
 from typing import List,Optional
 import inquirer
 import os
+import requests
+from bs4 import BeautifulSoup
+import time
 
 app = typer.Typer()
 SERVICE_ID = "pes_cli" 
@@ -111,40 +114,139 @@ def view_syllabus(course_codes: List[str] = typer.Argument(..., help="One or mor
                             unit_tree.add(topic.title)
                     console.print(root_tree)                
     asyncio.run(_logic())
+def create_authenticated_session():
+    """Create and return an authenticated session"""
+    session = requests.Session()
+    
+    login_url = "https://www.pesuacademy.com/Academy/j_spring_security_check"
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "Referer": "https://www.pesuacademy.com/Academy/"
+    }
+    
+    response = session.get("https://www.pesuacademy.com/Academy/", headers=headers)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    csrf_token = soup.find('input', {'name': '_csrf'})['value']
+    
+    login_data = {
+        "j_username": "PES1UG25CS258",
+        "j_password": "lohithk@123",
+        "_csrf": csrf_token
+    }
+    
+    response = session.post(login_url, data=login_data, headers=headers)
+    print("Warming up session...")
+    session.get("https://www.pesuacademy.com/Academy/a/dashboard")
+    time.sleep(2)
+    
+    if response.status_code == 200 or response.status_code == 302:
+        print("✓ Session authenticated!")
+        return session, headers
+    else:
+        print(f"Login failed. Status code: {response.status_code}")
+        return None, None
+
+def download_file(link, session, headers):
+    """Download a single file using existing session"""
+    try:
+        print(f"Downloading: {link.title}...")
+        
+        pdf_url = link.url
+        pdf_res = session.get(pdf_url, headers=headers)
+        
+        if pdf_res.status_code != 200:
+            print(f"❌ Failed to download {link.title} - Status: {pdf_res.status_code}")
+            return
+        
+        content = pdf_res.content[:10]
+        
+        # Determine file type
+        file_type = 'pdf'
+        if b'%PDF' in content:
+            file_type = 'pdf'
+        elif b'PK' in content:
+            file_type = 'pptx'
+        else:
+            file_type ='ppt'
+        
+        # Sanitize filename
+        safe_filename = "".join(c for c in link.title if c.isalnum() or c in (' ', '-', '_')).strip()
+        filepath = f"{safe_filename}.{file_type}"
+        
+        with open(filepath, "wb") as f:
+            f.write(pdf_res.content)
+            print(f"✓ Downloaded: {filepath} ({len(pdf_res.content)} bytes)")
+        
+        # Small delay between downloads
+        time.sleep(1)
+        
+    except Exception as e:
+        print(f"❌ Error downloading {link.title}: {e}")
+
 @app.command()
 def download():
     async def _logic():
-        view='home'
-        student=await get_student()
-        courses=await student.get_courses()
-        courses_names=[course.title for course in courses[1]]
-        questions=[
+        student = await get_student()
+        courses = await student.get_courses()
+        courses_names = [course.title for course in courses[1]]
+        
+        questions = [
             inquirer.List('course',
-            message="Choose a course",choices=courses_names)
+                message="Choose a course", choices=courses_names)
         ]
-        course_opt=inquirer.prompt(questions)
-        selected_course=course_opt['course']
-        course_id=[course.id for course in courses[1] if course.title==selected_course][0]
-        units=await student.get_units_for_course(course_id=course_id)
-        unit_opt=[
+        course_opt = inquirer.prompt(questions)
+        selected_course = course_opt['course']
+        course_id = [course.id for course in courses[1] if course.title == selected_course][0]
+        
+        units = await student.get_units_for_course(course_id=course_id)
+        unit_opt = [
             inquirer.List('units',
-            message='Choose a unit',choices=[unit.title for unit in units])
+                message='Choose a unit', choices=[unit.title for unit in units])
         ]
-        unit_prompt=inquirer.prompt(unit_opt)
-        selected_unit=unit_prompt['units']
-        unit_id=[unit.id for unit in units if unit.title==selected_unit][0]
-        topics=await student.get_topics_for_unit(unit_id=unit_id)
-        topics_opt=[
+        unit_prompt = inquirer.prompt(unit_opt)
+        selected_unit = unit_prompt['units']
+        unit_id = [unit.id for unit in units if unit.title == selected_unit][0]
+        
+        topics = await student.get_topics_for_unit(unit_id=unit_id)
+        topics_opt = [
             inquirer.Checkbox('topics',
-                message='Choose a topic',
+                message='Choose topics (use space to select, enter to confirm)',
                 choices=[topic.title for topic in topics],
-                
             )
         ]
-        topic_prompt=inquirer.prompt(topics_opt)
-        topic_ans=topic_prompt['topics']
-        print(topic_ans)
-
+        topic_prompt = inquirer.prompt(topics_opt)
+        topic_ans = topic_prompt['topics']
+        filtered_topics = list(filter(lambda x: x.title in topic_ans, topics))
+        
+        # Collect ALL links first
+        all_links = []
+        for topic in filtered_topics:
+            material_links = await student.get_material_links(topic=topic, material_type_id=2)
+            if material_links:
+                all_links.extend(material_links)
+        
+        if not all_links:
+            print("No materials found!")
+            return
+        
+        print(f"Found {len(all_links)} files to download\n")
+        
+        # Create session once
+        session, headers = create_authenticated_session()
+        
+        if not session:
+            print("❌ Failed to authenticate")
+            return
+        
+        try:
+            # Download all files
+            for idx, link in enumerate(all_links, 1):
+                print(f"[{idx}/{len(all_links)}]", end=" ")
+                download_file(link, session, headers)
+        finally:
+            session.close()
+            print("\n✓ All downloads completed!")
 
     asyncio.run(_logic())
 
