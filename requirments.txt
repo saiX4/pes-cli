@@ -1,0 +1,9 @@
+asyncio
+typer
+keyring  
+pesuacademy  
+rich
+typing  
+inquirer
+requests
+beautifulsoup4
