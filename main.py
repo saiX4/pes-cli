@@ -250,6 +250,10 @@ def download():
 
     asyncio.run(_logic())
 
+@app.command('timetable')
+def timetable():
+    async def _logic():
+        pass
 
         
 if __name__ == "__main__":
