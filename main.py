@@ -147,7 +147,7 @@ def create_authenticated_session():
         print(f"Login failed. Status code: {response.status_code}")
         return None, None
 
-def download_file(link, session, headers):
+def download_file(link, session, headers,unit,course,idx):
     """Download a single file using existing session"""
     try:
         print(f"Downloading: {link.title}...")
@@ -171,12 +171,19 @@ def download_file(link, session, headers):
             file_type ='ppt'
         
         # Sanitize filename
+        
         safe_filename = "".join(c for c in link.title if c.isalnum() or c in (' ', '-', '_')).strip()
-        filepath = f"{safe_filename}.{file_type}"
+        folder_name = os.path.join(course, unit)
+        os.makedirs(folder_name,exist_ok=True)
+
+
+        filepath = os.path.join(folder_name,f"{safe_filename+str(idx)}.{file_type}")
+
         
         with open(filepath, "wb") as f:
             f.write(pdf_res.content)
             print(f"✓ Downloaded: {filepath} ({len(pdf_res.content)} bytes)")
+
         
         # Small delay between downloads
         time.sleep(1)
@@ -200,10 +207,15 @@ def download():
         course_id = [course.id for course in courses[1] if course.title == selected_course][0]
         
         units = await student.get_units_for_course(course_id=course_id)
+        if not units:
+            print('No materails available')
+            return
+        
         unit_opt = [
             inquirer.List('units',
                 message='Choose a unit', choices=[unit.title for unit in units])
         ]
+        
         unit_prompt = inquirer.prompt(unit_opt)
         selected_unit = unit_prompt['units']
         unit_id = [unit.id for unit in units if unit.title == selected_unit][0]
@@ -212,12 +224,14 @@ def download():
         topics_opt = [
             inquirer.Checkbox('topics',
                 message='Choose topics (use space to select, enter to confirm)',
-                choices=[topic.title for topic in topics],
+                choices=['all']+[topic.title for topic in topics],
             )
         ]
+        
         topic_prompt = inquirer.prompt(topics_opt)
         topic_ans = topic_prompt['topics']
         filtered_topics = list(filter(lambda x: x.title in topic_ans, topics))
+        
         
         # Collect ALL links first
         all_links = []
@@ -225,7 +239,7 @@ def download():
             material_links = await student.get_material_links(topic=topic, material_type_id=2)
             if material_links:
                 all_links.extend(material_links)
-        
+
         if not all_links:
             print("No materials found!")
             return
@@ -243,7 +257,8 @@ def download():
             # Download all files
             for idx, link in enumerate(all_links, 1):
                 print(f"[{idx}/{len(all_links)}]", end=" ")
-                download_file(link, session, headers)
+                download_file(link, session, headers,selected_unit,selected_course,idx)
+
         finally:
             session.close()
             print("\n✓ All downloads completed!")
@@ -253,8 +268,9 @@ def download():
 @app.command('timetable')
 def timetable():
     async def _logic():
-        pass
-
-        
+        student=await get_student()
+        result=await student.get_results(semester=1)
+        print(result)
+    asyncio.run(_logic())
 if __name__ == "__main__":
     app()
